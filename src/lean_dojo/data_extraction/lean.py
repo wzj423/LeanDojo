@@ -4,14 +4,19 @@ Objects of these classes contain only surface information, without extracting an
 
 import re
 import os
+import shutil
 import json
 import toml
 import time
 import urllib
 import webbrowser
+import tempfile
+import subprocess
+import pickle
 from pathlib import Path
 from loguru import logger
 from functools import cache
+from filelock import FileLock
 from github import Github, Auth
 from dataclasses import dataclass, field
 from github.Repository import Repository
@@ -23,6 +28,7 @@ from ..utils import (
     url_exists,
     get_repo_info,
     working_directory,
+    report_critical_failure
 )
 from ..constants import (
     LEAN3_URL,
@@ -32,7 +38,78 @@ from ..constants import (
     LEAN4_PACKAGES_DIR_OLD,
     LEAN4_BUILD_DIR,
     LEAN_BUILD_DIR_OLD,
+    CACHE_DIR
 )
+
+from .cache import cache as trace_cache
+
+@dataclass(frozen=True, eq=False)
+class LeanRepoCache:
+    """Lean version information can be feteched online at runtime. But here we choose to make it local again."""
+
+    cache_dir: Path
+    lock: FileLock = field(init=False, repr=False)
+
+    def __post_init__(self):
+        if not os.path.exists(self.cache_dir):
+            self.cache_dir.mkdir(parents=True)
+        lock_path = self.cache_dir.with_suffix(".lean_prover_repo.lock")
+        object.__setattr__(self, "lock", FileLock(lock_path))
+
+        if not self.get("leanprover/lean4-nightly"):
+            self.store("leanprover/lean4-nightly", None)
+        if not self.get("leanprover/lean4"):
+            self.store("leanprover/lean4", None)
+        assert(self.get("leanprover/lean4-nightly") and self.get("leanprover/lean4")), "LeanRepoCache init error!"
+
+
+    def get(self, full_name: str) -> Optional[Path]:
+        """Get the path of a lean repo named ``full_name_or_id``. Possible values include "leanprover/lean4" and "leanprover/lean4-nightly". Return None if no such repo can be found."""
+        # dirname = full_name.replace("/", "--")
+        dirname = full_name
+        dirpath = self.cache_dir / dirname
+
+        with self.lock:
+            if dirpath.exists():
+                return dirpath
+            else:
+                return None
+
+    # def store(self, full_name: str ,src: Optional[Path]) -> Path:
+    #     """Store a lean repo named ``full_name_or_id`` at path ``src``. Return its path in the cache."""
+    #     if full_name is None:
+    #         raise ValueError("full_name cannot be None")
+    #     dirname = full_name #.replace("/", "--")
+    #     dirpath = self.cache_dir / dirname
+    #     if not dirpath.exists():
+    #         with self.lock:
+    #             with report_critical_failure(_CACHE_CORRPUTION_MSG):
+    #                 if src:
+    #                     shutil.copytree(str(src), str(dirpath))
+    #                 else:
+    #                     with tempfile.TemporaryDirectory() as temp_dir:
+    #                         subprocess.check_call(['git', 'clone', f'<https://github.com/{full_name}.git>', temp_dir])
+    #                         shutil.copytree(temp_dir, str(dirpath))
+    #     return dirpath
+
+
+    def store(self, full_name: str ,src: Optional[Path]) -> Path:
+        """Store a lean repo named ``full_name_or_id`` at path ``src``. Return its path in the cache."""
+        dirname = full_name #.replace("/", "--")
+        dirpath = self.cache_dir / dirname
+        if not dirpath.exists():
+            if src:
+                with self.lock:
+                    with report_critical_failure(_CACHE_CORRPUTION_MSG):
+                        shutil.copytree(src, dirpath)
+            else:
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    subprocess.check_call(['git', 'clone', f'https://github.com/{full_name}.git', temp_dir])
+                    with self.lock:
+                        shutil.copytree(temp_dir, str(dirpath))
+        return dirpath
+
+lean_repo_cache = LeanRepoCache(CACHE_DIR)
 
 
 GITHUB_ACCESS_TOKEN = os.getenv("GITHUB_ACCESS_TOKEN", None)
@@ -86,10 +163,27 @@ def get_latest_commit(url: str) -> str:
     repo = url_to_repo(url)
     return repo.get_branch(repo.default_branch).commit.sha
 
-
+@cache
+def get_latest_commit_local(repo_path: Path) -> str:
+    """Get the hash of the latest commit of the local Git repo at ``repo_path``."""
+    command = ['git', '-C', str(repo_path), 'rev-parse', 'HEAD']
+    commit_hash = subprocess.check_output(command).decode('utf-8').strip()
+    return commit_hash
+    
 def cleanse_string(s: Union[str, Path]) -> str:
     """Replace : and / with _ in a string."""
     return str(s).replace("/", "_").replace(":", "_")
+
+
+@cache
+def get_refs_to_hashes_dict(repo_path: str) -> dict:
+    ref_to_hash = {}
+    command = ['git', '-C', repo_path, 'for-each-ref', '--format', '%(objectname) %(refname:short)']
+    refs_output = subprocess.check_output(command)
+    for line in refs_output.decode('utf-8').strip().split('\n'):
+        hash, ref = line.split()
+        ref_to_hash[ref] = hash
+    return ref_to_hash
 
 
 @cache
@@ -106,6 +200,29 @@ def _to_commit_hash(repo: Repository, label: str) -> str:
             return tag.commit.sha
 
     raise ValueError(f"Invalid tag or branch: `{label}` for {repo}")
+
+@cache
+def _to_commit_hash_local(repo_path: str, label: str) -> str:
+    """Convert a tag or branch to a commit hash for a local Git repository."""
+    ref_dict = get_refs_to_hashes_dict(repo_path)
+    print(ref_dict)
+    return ref_dict[label]
+    # logger.debug(f"Querying the commit hash for {repo_path} {label}")
+    # # Check if a branch exists with this label
+    # branches_output = subprocess.check_output(['git', '-C', repo_path, 'branch'])
+    # branches = branches_output.decode('utf-8').split('\n')
+    # for branch in branches:
+    #     if branch.replace('*', '').strip() == label:
+    #         hash_output = subprocess.check_output(['git', '-C', repo_path, 'rev-parse', label])
+    #         return hash_output.decode('utf-8').strip()
+    # # Check if a tag exists with this label
+    # tags_output = subprocess.check_output(['git', '-C', repo_path, 'tag'])
+    # tags = tags_output.decode('utf-8').split('\n')
+    # for tag in tags:
+    #     if tag == label:
+    #         hash_output = subprocess.check_output(['git', '-C', repo_path, 'rev-list', '-n', '1', label])
+    #         return hash_output.decode('utf-8').strip()
+    # raise ValueError(f"Invalid tag or branch: `{label}` for {repo_path}")
 
 
 @dataclass(eq=True, unsafe_hash=True)
@@ -353,8 +470,14 @@ def get_lean4_version_from_config(toolchain: str) -> str:
     assert m is not None, "Invalid config."
     return m["version"]
 
-
 def get_lean4_commit_from_config(config_dict: Dict[str, Any]) -> str:
+    result1 = __get_lean4_commit_from_config(config_dict)
+    result2 = get_lean4_commit_from_config_local(config_dict)
+    print(f"result1={result1}, result2={result2} {get_lean4_commit_from_config_local({'content':'leanprover/lean4:nightly'})}")
+    assert( result1 ==result2)
+    return result1
+
+def __get_lean4_commit_from_config(config_dict: Dict[str, Any]) -> str:
     """Return the required Lean commit given a ``lean-toolchain`` config."""
     assert "content" in config_dict, "config_dict must have a 'content' field"
     config = config_dict["content"].strip()
@@ -372,22 +495,98 @@ def get_lean4_commit_from_config(config_dict: Dict[str, Any]) -> str:
     else:
         return _to_commit_hash(LEAN4_REPO, version)
 
+def get_lean4_commit_from_config_local(config_dict: Dict[str, Any]) -> str:
+    """Return the required Lean commit given a ``lean-toolchain`` config."""
+    assert "content" in config_dict, "config_dict must have a 'content' field"
+    config = config_dict["content"].strip()
+    prefix = "leanprover/lean4:"
+
+    if config == f"{prefix}nightly":
+        lean4_nightly_repo_path = lean_repo_cache.get("leanprover/lean4-nightly")
+        ref_to_hash_dict = get_refs_to_hashes_dict(lean4_nightly_repo_path)
+        latest_tag = _get_latest_tag_local(lean4_nightly_repo_path)
+        latest_tag_commit_hash = ref_to_hash_dict[latest_tag]
+        return latest_tag_commit_hash
+
+    assert config.startswith(prefix), f"Invalid Lean 4 version: {config}"
+    version = config[len(prefix) :]
+
+    if version.startswith("nightly"):
+        lean4_nightly_repo_path = lean_repo_cache.get("leanprover/lean4-nightly")
+        ref_to_hash_dict = get_refs_to_hashes_dict(lean4_nightly_repo_path)
+        return ref_to_hash_dict[version]
+        # return _to_commit_hash_local(lean4_nightly_repo_path, version)
+    else:
+        lean4_repo_path = lean_repo_cache.get("leanprover/lean4")
+        ref_to_hash_dict = get_refs_to_hashes_dict(lean4_repo_path)
+        return ref_to_hash_dict[version]
+        # return _to_commit_hash_local(lean4_repo_path, version)
+
+@cache
+def _get_latest_tag_local(repo_path: str) -> str:
+    """Get the latest tag in a local Git repository."""
+    command = ['git', '-C', repo_path, 'for-each-ref', 'refs/tags', '--sort=taggerdate', '--format=%(refname:short)']
+    tags_output = subprocess.check_output(command)
+    tags = tags_output.decode('utf-8').strip().split('\n')
+    return tags[-1] if tags else None
+
+
 
 URL = TAG = COMMIT = str
 
 
-@dataclass(frozen=True)
+@dataclass
 class RepoInfoCache:
     """To minize the number of network requests, we cache and re-use the info
     of all repos, assuming it does not change during the execution of LeanDojo."""
+    cache_dir: Path
+    tag2commit: Dict[Tuple[str, str], str] = field(default_factory=dict)
+    uses_lean3: Dict[Tuple[str, str], bool] = field(default_factory=dict)
+    uses_lean4: Dict[Tuple[str, str], bool] = field(default_factory=dict)
+    lean_version: Dict[Tuple[str, str], str] = field(default_factory=dict)
+    lock: FileLock = field(init=False, repr=False)
 
-    tag2commit: Dict[Tuple[URL, TAG], COMMIT] = field(default_factory=dict)
-    uses_lean3: Dict[Tuple[URL, COMMIT], bool] = field(default_factory=dict)
-    uses_lean4: Dict[Tuple[URL, COMMIT], bool] = field(default_factory=dict)
-    lean_version: Dict[Tuple[URL, COMMIT], str] = field(default_factory=dict)
+    def __post_init__(self):
+        print(f"__post_init__ called,{self.tag2commit},{self.uses_lean3},{self.uses_lean4},{self.lean_version}")
+        if not os.path.exists(self.cache_dir):
+            os.makedirs(self.cache_dir, exist_ok=True)
+        lock_path = self.cache_dir.with_suffix(".repo_info.lock")
+        object.__setattr__(self, "lock", FileLock(str(lock_path)))
+        self.load()
+        print(f"RepoInfoCache Loaded, {self.tag2commit},{self.uses_lean3},{self.uses_lean4},{self.lean_version}")
+
+    def load(self):
+        cache_file = self.cache_dir / "RepoInfoCache.pickle"
+        with self.lock:
+            if cache_file.exists():
+                with cache_file.open("rb") as f:
+                    self.tag2commit, self.uses_lean3, self.uses_lean4, self.lean_version = pickle.load(
+                        f)
+            else:
+                self.tag2commit, self.uses_lean3, self.uses_lean4, self.lean_version = dict(),dict(),dict(),dict()
+
+    def save(self):
+        # Load cache from disk, merge with the in-memory-cache and save back
+        cache_file = self.cache_dir / "RepoInfoCache.pickle"
+        with self.lock:
+            if cache_file.exists():
+                with cache_file.open("rb") as f:
+                    tag2commit, uses_lean3, uses_lean4, lean_version = pickle.load(
+                        f)
+                    if isinstance(tag2commit, Dict):
+                        self.tag2commit.update(tag2commit)
+                    if isinstance(uses_lean3, Dict):
+                        self.uses_lean3.update(uses_lean3)
+                    if isinstance(uses_lean4, Dict):
+                        self.uses_lean4.update(uses_lean4)
+                    if isinstance(lean_version, Dict):
+                        self.lean_version.update(lean_version)
+            with cache_file.open("wb") as f:
+                pickle.dump((self.tag2commit, self.uses_lean3,
+                            self.uses_lean4, self.lean_version), f)
 
 
-info_cache = RepoInfoCache()
+info_cache = RepoInfoCache(CACHE_DIR)
 
 
 _GIT_REQUIREMENT_REGEX = re.compile(
@@ -433,7 +632,18 @@ class LeanGitRepo:
     You can also use tags such as ``v3.5.0``. They will be converted to commit hashes.
     """
 
-    repo: Repository = field(init=False, repr=False)
+    local_path: str = field(default=None)
+    """ The repo's local path.
+    Hack, if it is set then the LeanGitRepo will fetech information locally and offline.
+    """
+
+    _repo: Optional[Repository] = field(init=False, repr=False, default=None)
+    # repo: Repository = field(init=False, repr=False)
+    @property
+    def repo(self):
+        if self._repo is None:
+            object.__setattr__(self, "_repo", url_to_repo(self.url))
+        return self._repo
     """A :class:`github.Repository` object.
     """
 
@@ -455,7 +665,7 @@ class LeanGitRepo:
         if not self.url.startswith("https://"):
             raise ValueError(f"{self.url} is not a valid URL")
         object.__setattr__(self, "url", normalize_url(self.url))
-        object.__setattr__(self, "repo", url_to_repo(self.url))
+        # object.__setattr__(self, "repo", url_to_repo(self.url))
 
         # Convert tags or branches to commit hashes
         if not (len(self.commit) == 40 and _COMMIT_REGEX.fullmatch(self.commit)):
@@ -467,26 +677,34 @@ class LeanGitRepo:
                 info_cache.tag2commit[(self.url, self.commit)] = commit
             object.__setattr__(self, "commit", commit)
 
+        # Trying to fetch local_path from cache
+        print(f"self.local_path={self.local_path}")
+        if not self.local_path:
+            local_traced_repo_path = trace_cache.get(self.url, self.commit)
+            if local_traced_repo_path:
+                object.__setattr__(self, "local_path", local_traced_repo_path)
+        print(f"self.local_path={self.local_path} now")
+
         # Determine whether the repo uses Lean 3 or Lean 4
         if (self.url, self.commit) in info_cache.uses_lean3:
             uses_lean3 = info_cache.uses_lean3[(self.url, self.commit)]
         else:
-            uses_lean3 = self.is_lean3 or url_exists(
-                self._get_config_url("leanpkg.toml")
-            )
+            uses_lean3 = self.is_lean3 or self._config_exists("leanpkg.toml")# or url_exists(
+            #    self._get_config_url("leanpkg.toml")
+            #)
         info_cache.uses_lean3[(self.url, self.commit)] = uses_lean3
         object.__setattr__(self, "uses_lean3", uses_lean3)
 
         if (self.url, self.commit) in info_cache.uses_lean4:
             uses_lean4 = info_cache.uses_lean4[(self.url, self.commit)]
         else:
-            uses_lean4 = self.is_lean4 or url_exists(
-                self._get_config_url("lean-toolchain")
-            )
+            uses_lean4 = self.is_lean4 or self._config_exists("lean-toolchain") #url_exists(
+            #    self._get_config_url("lean-toolchain")
+            #)
         info_cache.uses_lean4[(self.url, self.commit)] = uses_lean4
         object.__setattr__(self, "uses_lean4", uses_lean4)
 
-        assert uses_lean3 ^ uses_lean4
+        assert uses_lean3 ^ uses_lean4, "Lean major version error!"
 
         # Determine the required Lean version, e.g., ``v3.50.3``.
         if (self.url, self.commit) in info_cache.lean_version:
@@ -502,14 +720,18 @@ class LeanGitRepo:
         info_cache.lean_version[(self.url, self.commit)] = lean_version
         object.__setattr__(self, "lean_version", lean_version)
 
+        info_cache.save()
     @classmethod
     def from_path(cls, path: Path) -> "LeanGitRepo":
         """Construct a :class:`LeanGitRepo` object from the path to a local Git repo."""
         url, commit = get_repo_info(path)
-        return cls(url, commit)
+        return cls(url, commit, path)
 
     @property
     def name(self) -> str:
+        if self.local_path:
+            return Path(self.local_path).name
+        assert self.repo, "A Github Repo must be valid when no local repo is given!"
         return self.repo.name
 
     @property
@@ -534,12 +756,17 @@ class LeanGitRepo:
         webbrowser.open(self.commit_url)
 
     def exists(self) -> bool:
-        return url_exists(self.commit_url)
+        return self.local_path or url_exists(self.commit_url)
 
     def clone_and_checkout(self) -> None:
         """Clone the repo to the current working directory and checkout a specific commit."""
         logger.debug(f"Cloning {self}")
-        execute(f"git clone -n --recursive {self.url}", capture_output=True)
+        if self.local_path:
+            shutil.copytree(self.local_path,Path(os.getcwd())/self.name)
+            loguru.info(f"Find local repository, copy {self.local_path} to {Path(os.getcwd())/self.name}")
+        else:
+            execute(f"git clone -n --recursive {self.url}", capture_output=True)
+
         with working_directory(self.name):
             execute(
                 f"git checkout {self.commit} && git submodule update --recursive",
@@ -632,7 +859,7 @@ class LeanGitRepo:
                 commit = rev
             else:
                 try:
-                    commit = _to_commit_hash(url_to_repo(url), rev)
+                      commit = _to_commit_hash(url_to_repo(url), rev)
                 except ValueError:
                     commit = get_latest_commit(url)
                 assert _COMMIT_REGEX.fullmatch(commit)
@@ -684,6 +911,16 @@ class LeanGitRepo:
         except urllib.error.HTTPError:
             return None
 
+    def _config_exists(self, filename: str) -> str:
+        if self.local_path or trace_cache.get(self.url, self.commit):
+            if not self.local_path:
+                object.__setattr__(self, "local_path", trace_cache.get(self.url, self.commit))                
+            file_path = Path(self.local_path) / filename
+            return self.local_path and file_path.exists()
+        else:
+            logger.debug(f"Falling back to detect config ONLINE")
+            return url_exists(self._get_config_url("leanpkg.toml"))
+
     def _get_config_url(self, filename: str) -> str:
         assert "github.com" in self.url, f"Unsupported URL: {self.url}"
         url = self.url.replace("github.com", "raw.githubusercontent.com")
@@ -691,6 +928,37 @@ class LeanGitRepo:
 
     def get_config(self, filename: str, num_retries: int = 2) -> Dict[str, Any]:
         """Return the repo's files."""
+        # breakpoint()  
+        if self.local_path and os.path.isdir(self.local_path):
+            try:
+
+                local_file_path = self.local_path / filename
+                with open(local_file_path,"r") as f:
+                    content = f.read()
+                if filename.endswith(".toml"):
+                    return toml.loads(content)
+                elif filename.endswith(".json"):
+                    return json.loads(content)
+                else:
+                    return {"content": content}
+            except Exception as e:
+                print(e)            
+        local_traced_repo_path = trace_cache.get(self.url, self.commit)
+        if local_traced_repo_path:
+            object.__setattr__(self, "local_path", local_traced_repo_path)
+            try:
+                local_file_path = local_traced_repo_path / filename
+                with open(local_file_path,"r") as f:
+                    content = f.read()
+                if filename.endswith(".toml"):
+                    return toml.loads(content)
+                elif filename.endswith(".json"):
+                    return json.loads(content)
+                else:
+                    return {"content": content}
+            except Exception as e:
+                print(e)
+        logger.debug(f"Falling back to fetch config ONLINE")
         config_url = self._get_config_url(filename)
         content = read_url(config_url, num_retries)
         if filename.endswith(".toml"):

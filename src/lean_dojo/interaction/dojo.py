@@ -52,7 +52,8 @@ class TacticState:
     @property
     def num_goals(self) -> int:
         return len(self.goals)
-
+    def __lt__(self,other):
+        return self.pp<other.pp
 
 @dataclass(frozen=True)
 class ProofFinished:
@@ -200,7 +201,7 @@ class Dojo:
             os.chdir(self.tmp_dir)
 
             # Copy and `cd` into the repo.
-            traced_repo_path = get_traced_repo_path(self.repo)
+            traced_repo_path = get_traced_repo_path(self.repo, False)  #Hack here
             shutil.copytree(
                 traced_repo_path,
                 self.repo.name,
@@ -323,6 +324,7 @@ class Dojo:
     def _handle_hard_timeout(self, signum: Any, frame: Any) -> None:
         logger.debug(f"Hard timeout in {self}")
         self.has_timedout = True
+        # breakpoint()
         raise DojoHardTimeoutError()
 
     def _install_handlers(self) -> None:
@@ -485,6 +487,9 @@ class Dojo:
                 f"Attempting to run a tactic on an invalid state {state}."
             )
         assert isinstance(tactic, str), f"Invalid tactic {tactic}"
+
+        if self.has_timedout:
+            raise DojoHardTimeoutError()
 
         tsid = state.id
         if self.uses_lean4:
