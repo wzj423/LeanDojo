@@ -919,7 +919,7 @@ class LeanGitRepo:
             return self.local_path and file_path.exists()
         else:
             logger.debug(f"Falling back to detect config ONLINE")
-            return url_exists(self._get_config_url("leanpkg.toml"))
+            return url_exists(self._get_config_url(filename))
 
     def _get_config_url(self, filename: str) -> str:
         assert "github.com" in self.url, f"Unsupported URL: {self.url}"
