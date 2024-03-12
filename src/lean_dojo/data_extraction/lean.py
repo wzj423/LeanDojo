@@ -763,15 +763,15 @@ class LeanGitRepo:
         logger.debug(f"Cloning {self}")
         if self.local_path:
             shutil.copytree(self.local_path,Path(os.getcwd())/self.name)
-            loguru.info(f"Find local repository, copy {self.local_path} to {Path(os.getcwd())/self.name}")
+            logger.info(f"Find local repository, copy {self.local_path} to {Path(os.getcwd())/self.name}")
         else:
             execute(f"git clone -n --recursive {self.url}", capture_output=True)
 
-        with working_directory(self.name):
-            execute(
-                f"git checkout {self.commit} && git submodule update --recursive",
-                capture_output=True,
-            )
+            with working_directory(self.name):
+                execute(
+                    f"git checkout {self.commit} && git submodule update --recursive",
+                    capture_output=True,
+                )
 
     def get_packages_dir(self) -> Path:
         """Return the path to the directory where Lean packages are stored."""
