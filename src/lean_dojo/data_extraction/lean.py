@@ -127,10 +127,10 @@ else:
     )
     GITHUB = Github()
 
-LEAN4_REPO = GITHUB.get_repo("leanprover/lean4")
-"""The GitHub Repo for Lean 4 itself."""
+# LEAN4_REPO = GITHUB.get_repo("leanprover/lean4")
+# """The GitHub Repo for Lean 4 itself."""
 
-LEAN4_NIGHTLY_REPO = GITHUB.get_repo("leanprover/lean4-nightly")
+# LEAN4_NIGHTLY_REPO = GITHUB.get_repo("leanprover/lean4-nightly")
 """The GitHub Repo for Lean 4 nightly releases."""
 
 _URL_REGEX = re.compile(r"(?P<url>.*?)/*")
@@ -471,29 +471,29 @@ def get_lean4_version_from_config(toolchain: str) -> str:
     return m["version"]
 
 def get_lean4_commit_from_config(config_dict: Dict[str, Any]) -> str:
-    result1 = __get_lean4_commit_from_config(config_dict)
+    # result1 = __get_lean4_commit_from_config(config_dict)
     result2 = get_lean4_commit_from_config_local(config_dict)
-    print(f"result1={result1}, result2={result2} {get_lean4_commit_from_config_local({'content':'leanprover/lean4:nightly'})}")
-    assert( result1 ==result2)
-    return result1
+    # print(f"result1={result1}, result2={result2} {get_lean4_commit_from_config_local({'content':'leanprover/lean4:nightly'})}")
+    # assert( result1 ==result2)
+    return result2
 
-def __get_lean4_commit_from_config(config_dict: Dict[str, Any]) -> str:
-    """Return the required Lean commit given a ``lean-toolchain`` config."""
-    assert "content" in config_dict, "config_dict must have a 'content' field"
-    config = config_dict["content"].strip()
-    prefix = "leanprover/lean4:"
+# def __get_lean4_commit_from_config(config_dict: Dict[str, Any]) -> str:
+#     """Return the required Lean commit given a ``lean-toolchain`` config."""
+#     assert "content" in config_dict, "config_dict must have a 'content' field"
+#     config = config_dict["content"].strip()
+#     prefix = "leanprover/lean4:"
 
-    if config == f"{prefix}nightly":
-        latest_tag = LEAN4_NIGHTLY_REPO.get_tags()[0]
-        return latest_tag.commit.sha
+#     if config == f"{prefix}nightly":
+#         latest_tag = LEAN4_NIGHTLY_REPO.get_tags()[0]
+#         return latest_tag.commit.sha
 
-    assert config.startswith(prefix), f"Invalid Lean 4 version: {config}"
-    version = config[len(prefix) :]
+#     assert config.startswith(prefix), f"Invalid Lean 4 version: {config}"
+#     version = config[len(prefix) :]
 
-    if version.startswith("nightly"):
-        return _to_commit_hash(LEAN4_NIGHTLY_REPO, version)
-    else:
-        return _to_commit_hash(LEAN4_REPO, version)
+#     if version.startswith("nightly"):
+#         return _to_commit_hash(LEAN4_NIGHTLY_REPO, version)
+#     else:
+#         return _to_commit_hash(LEAN4_REPO, version)
 
 def get_lean4_commit_from_config_local(config_dict: Dict[str, Any]) -> str:
     """Return the required Lean commit given a ``lean-toolchain`` config."""
@@ -632,7 +632,7 @@ class LeanGitRepo:
     You can also use tags such as ``v3.5.0``. They will be converted to commit hashes.
     """
 
-    local_path: str = field(default=None)
+    local_path: Optional[Path] = field(default=None)
     """ The repo's local path.
     Hack, if it is set then the LeanGitRepo will fetech information locally and offline.
     """
@@ -859,7 +859,7 @@ class LeanGitRepo:
                 commit = rev
             else:
                 try:
-                      commit = _to_commit_hash(url_to_repo(url), rev)
+                    commit = _to_commit_hash(url_to_repo(url), rev)
                 except ValueError:
                     commit = get_latest_commit(url)
                 assert _COMMIT_REGEX.fullmatch(commit)
@@ -932,7 +932,7 @@ class LeanGitRepo:
         if self.local_path and os.path.isdir(self.local_path):
             try:
 
-                local_file_path = self.local_path / filename
+                local_file_path = Path(self.local_path) / filename
                 with open(local_file_path,"r") as f:
                     content = f.read()
                 if filename.endswith(".toml"):
