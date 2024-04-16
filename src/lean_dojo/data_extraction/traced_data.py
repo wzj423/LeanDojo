@@ -363,6 +363,11 @@ class TracedTheorem:
 
         return names
 
+    def get_traced_smallstep_tactics(self) :
+        tacs=self.traced_file.small_step_tacs
+        tacs = [x for x in tacs if x[5]>=self.start and x[6]<=self.end] 
+        return tacs
+
     def get_traced_tactics(self, atomic_only: bool = False) -> List[TracedTactic]:
         """Return a list of traced tactics in the proof."""
         tacs = self._get_traced_tactics_lean4(atomic_only)
@@ -433,6 +438,182 @@ def _fix_indentation(tac: str, indent: int) -> str:
 
         return "\n".join(lines_new)
 
+    
+def generate_sub_tactics(raw_tactic_list,lean_file):
+    dedup_list = []
+    # for i,tactic in enumerate(raw_tactic_list):
+    #     f = lambda t: (tactic["stateBefore"] == t["stateBefore"] and tactic["stateAfter"] == t["stateAfter"] and tactic['pos'] == t['pos'] and tactic['endPos'] == t['endPos']) or \
+    #         (tactic["tacticName"] == t["tacticName"]  and tactic['pos'] == t['pos'] and tactic['endPos'] == t['endPos'])
+    #     f = lambda t: (tactic['pos'] == t['pos'] and tactic['endPos'] == t['endPos'])
+    #     is_dup = False
+    #     for t in dedup_list:
+    #         if f(t) : 
+    #             is_dup = True
+    #             break
+    #     if not is_dup:
+    #         dedup_list.append(tactic)
+    dedup_list = raw_tactic_list
+    # dedup_list = [x for x in dedup_list if x["tacticName"]!="null"]
+
+    def build_tree_inplace(dedup_list, logging=False):
+        for tac in dedup_list:
+            # print(i,tac["pos"],tac["endPos"])
+            tac["children"]=[]
+            tac["father"]=None
+        num_tacs = len(dedup_list)
+        has_parent=[False for x in dedup_list]
+        # print("num_tacs=",num_tacs)
+        for i in range(num_tacs-1,-1,-1):
+            # has_parent=False
+            for j in range(i-1,-1,-1):
+                def contains(t1,t2): return t1["pos"]<=t2["pos"] and t1["endPos"]>=t2["endPos"]
+                if contains(dedup_list[j],dedup_list[i]):
+                    dedup_list[j]['children'].append(dedup_list[i])
+                    dedup_list[i]['father'] = dedup_list[j]
+                    if logging: print(f'{dedup_list[i]["pos"]}:{dedup_list[i]["endPos"]}{dedup_list[i]["tacticName"]} -> {dedup_list[j]["pos"]}:{dedup_list[j]["endPos"]}{dedup_list[j]["tacticName"]}\n')
+                    has_parent[i]=True
+                    break
+            if logging and not has_parent: print(f' {dedup_list[i]["pos"]}:{dedup_list[i]["endPos"]} No Parent!')
+
+    build_tree_inplace(dedup_list=dedup_list)
+    dedup_list = list(filter(lambda x: "Lean.Parser.Tactic.tacticSeq1Indented" in x['tacticName'] or x.get("father",None) and "Lean.Parser.Tactic.tacticSeq1Indented" in x['father']['tacticName'],
+                        dedup_list))
+    # dedup_list = list(filter(lambda x:  x.get("father",None) and "Lean.Parser.Tactic.tacticSeq1Indented" in x['father']['tacticName'],
+    #                     dedup_list))
+    # TODO: Besides "Lean.Parser.Tactic.tacticSeq1Indented" , "Lean.Parser.Tactic.tacticSeqBracket" should be taken into consideration
+    build_tree_inplace(dedup_list=dedup_list,logging=True) 
+
+    small_step_tacs,sub_tacs=[],[]
+    
+    def calc_hole_tac(tactic_list:List[Dict]): # 自底向上，计算每个seq被完全挖空之后是什么样的。
+        for i,tac in enumerate(reversed(tactic_list)):
+            tac["file_pos"] = lean_file.convert_pos(tac["pos"])
+            tac["file_end_pos"] = lean_file.convert_pos(tac['endPos'])
+            tac["tactic_raw"] = lean_file[tac["file_pos"]:tac["file_end_pos"]]
+            tac["idx"] = len(tactic_list)-i-1
+            if len(tac["children"])>0:
+                tac["children"].sort(key=lambda x: x["pos"])
+            if len(tac["children"])==0:
+                tac["hole_text"]=[tac["tactic_raw"]]
+            
+            elif  "Lean.Parser.Tactic.tacticSeq" in tac['tacticName']:
+                tac["hole_text"]=[]
+                cur_pos = tac["file_pos"]
+                for ch_tac in tac["children"]:
+                    if ch_tac["file_pos"]>cur_pos:
+                        tac["hole_text"].append(lean_file[cur_pos:ch_tac["file_pos"]])
+                        cur_pos = ch_tac["file_end_pos"]
+                    # if "Lean.Parser.Tactic.tacticSeq" in ch_tac['tacticName']:
+                    tac["hole_text"]+=[("<CURSOR>",i,ch_tac)]
+                    # else:
+                    # tac["hole_text"]+=ch_tac["hole_text"]
+                    cur_pos = ch_tac["file_end_pos"]
+                if tac["file_end_pos"]>cur_pos:
+                    tac["hole_text"].append(lean_file[cur_pos:tac["file_end_pos"]])
+            else:   
+                tac["hole_text"]=[]
+                cur_pos = tac["file_pos"]
+                for ch_tac in tac["children"]:
+                    if ch_tac["file_pos"]>cur_pos:
+                        tac["hole_text"].append(lean_file[cur_pos:ch_tac["file_pos"]])
+                        cur_pos = ch_tac["file_end_pos"]
+                    # if "Lean.Parser.Tactic.tacticSeq" in ch_tac['tacticName']:
+                    #     tac["hole_text"]+=["<CURSOR>"]
+                    # else:
+                    tac["hole_text"]+=ch_tac["hole_text"]
+                if tac["file_end_pos"]>cur_pos:
+                    tac["hole_text"].append(lean_file[cur_pos:tac["file_end_pos"]])
+                
+            # print(f'{tac["tactic_raw"]} ===> {tac["hole_text"]}')
+    calc_hole_tac(dedup_list)
+    # def rec_get_tacs(tactic):
+    #     if len(tactic["children"])>0:
+    #         tactic["children"].sort(key=lambda x: x["pos"])
+    #         assert(len(set([x["pos"] for x in tactic["children"]]))==len(tactic["children"]))
+    #         if tactic["pos"]<tactic["children"][0]["pos"]:
+    #             sub_tacs.append({"stateBefore":tactic["stateBefore"],"stateAfter":tactic["children"][0]["stateBefore"],"pos":tactic["pos"],"endPos":tactic["children"][0]["pos"]})
+    #             # print(f'A{tactic["pos"]}:{tactic["children"][0]["pos"]}')
+    #         for i,t in enumerate(tactic["children"]):
+    #             rec_get_tacs(t)
+    #             if i+1<len(tactic['children']) and t["endPos"]<tactic["children"][i+1]["pos"]:
+    #                 sub_tacs.append({"stateBefore":t["stateAfter"],"stateAfter":tactic["children"][i+1]["stateBefore"],"pos":t["endPos"],"endPos":tactic["children"][i+1]["pos"]})
+    #                 # print(f'B{t["endPos"]}:{tactic["children"][i+1]["pos"]}')                    
+                    
+    #         if tactic["endPos"]>tactic["children"][-1]["endPos"]:
+    #             sub_tacs.append({"stateBefore":tactic["children"][-1]["stateAfter"],"stateAfter":tactic["stateAfter"],"pos":tactic["children"][-1]["endPos"],"endPos":tactic["endPos"]})         
+    #             # print(f'C{tactic["children"][-1]["endPos"]}:{tactic["endPos"]}')   
+    #     else:
+    #         # print(f'X{tactic["pos"]}:{tactic["endPos"]}')
+    #         refined_tactic = tactic.copy()
+    #         refined_tactic.pop("children")
+    #         small_step_tacs.append(tactic)
+
+    def make_raw_hole_text(hole_text:List):
+        raw_texts = map(lambda x: x if isinstance(x,str) else x[0],hole_text)
+        raw_text = "".join(raw_texts)
+        return raw_text
+
+    def make_nth_raw_hole_text(hole_text:List, start_nth=0): # Make raw hole text, starting from the nth hole. Holes beefore that are fully initialized with "tactic_raw"
+        raw_texts=[]
+        hole_idx=0
+        for x in hole_text:
+            if isinstance(x,str):
+                raw_texts.append(x)
+            else:
+                if hole_idx>=start_nth:
+                    raw_texts.append(x[0])
+                else:
+                    raw_texts.append(x[2]["tactic_raw"])
+                hole_idx+=1
+        raw_text = "".join(raw_texts)
+        return raw_text
+
+    small_step_tacs= []
+
+    def rec_calc_transition_text(tac,inst_text="",top_indent=0) : # Top-down builds the instantiated transition text:
+        new_inst_text = inst_text
+        if  "Lean.Parser.Tactic.tacticSeq" in tac['tacticName']:
+            top_indent = tac["file_pos"].column_nb-1
+            for ch_tac in tac["children"]:
+                new_inst_text = rec_calc_transition_text(ch_tac,new_inst_text,top_indent)
+        else:
+            raw_hole_text = make_raw_hole_text(tac["hole_text"])
+            if "\n" in raw_hole_text:
+                raw_hole_text = _fix_indentation(raw_hole_text,top_indent) # Fix the proof level (i.e. top tacSeq indent)
+            if "<CURSOR>" not in inst_text:
+                new_inst_text=(inst_text+"\n" if inst_text != "" else "")+raw_hole_text
+            else:
+                new_inst_text=inst_text.replace("<CURSOR>",raw_hole_text,1)
+            if "<CURSOR>" not in raw_hole_text:
+                state_before, state_after = tac["stateBefore"],tac["stateAfter"]
+                small_step_tacs.append((inst_text,new_inst_text,raw_hole_text,state_before,state_after,tac["file_pos"],tac["file_end_pos"]))
+            else:
+                hole_idx = 0
+                for x in tac["hole_text"]:
+                    if not isinstance(x,str):
+                        if hole_idx == 0:
+                            state_before, state_after = tac["stateBefore"], x[2]["stateBefore"]
+                            small_step_tacs.append((inst_text,new_inst_text,raw_hole_text,state_before,state_after,tac["file_pos"],tac["file_end_pos"]))
+                        new_inst_text=rec_calc_transition_text(x[2],new_inst_text,top_indent)
+                        hole_idx+=1
+
+            return new_inst_text
+                    
+    for tac in dedup_list:
+        if tac.get("father",None) == None:
+            rec_calc_transition_text(tac)
+    # exit(-1)
+    # for x in sub_tacs:
+    #     x["file_pos"] = lean_file.convert_pos(x["pos"])
+    #     x["file_end_pos"] = lean_file.convert_pos(x['endPos'])
+    #     x["tactic"] = lean_file[x["file_pos"]:x["file_end_pos"]]
+    # for x in small_step_tacs:
+    #     x["file_pos"] = lean_file.convert_pos(x["pos"])
+    #     x["file_end_pos"] = lean_file.convert_pos(x['endPos'])
+    #     x["tactic"] = lean_file[x["file_pos"]:x["file_end_pos"]]
+    # print(small_step_tacs)
+    # print(sub_tacs)
+    return small_step_tacs,sub_tacs
 
 @dataclass(eq=False)
 class TracedFile:
@@ -462,11 +643,16 @@ class TracedFile:
     """All comments in the :code:`*.lean` file.
     """
 
+    small_step_tacs: Optional[List[Dict]] = field(default=None,repr=False)
+    """Hack here, use small step tactics instead."""    # raw_sub_tactics: List[Node] = field(repr=False)
+
     traced_repo: Optional["TracedRepo"] = field(default=None, repr=False)
     """The traced repo this traced file belongs to.
     
     Note that ``traced_repo`` will become None after the traced file is serialized/deserialized on its own.
     """
+    
+
 
     def __post_init__(self) -> None:
         assert self.root_dir.is_absolute(), f"{self.root_dir} is not an absolute path"
@@ -544,6 +730,11 @@ class TracedFile:
                 break
             data["module_paths"].append(line)
 
+        small_step_tacs, sub_tacs = generate_sub_tactics(data["tactics"],lean_file=lean_file)
+        
+        tacs = small_step_tacs+sub_tacs
+        tacs.sort(key=lambda x: x[5])
+        
         ast = FileNode.from_data(data, lean_file)
         comments = _collect_lean4_comments(ast)
         TracedFile._post_process_lean4(
@@ -555,7 +746,7 @@ class TracedFile:
             comments,
         )
 
-        return cls(root_dir, repo, lean_file, ast, comments)
+        return cls(root_dir, repo, lean_file, ast, comments,small_step_tacs=tacs)
 
     @classmethod
     def _post_process_lean4(
@@ -572,6 +763,7 @@ class TracedFile:
             start = lean_file.convert_pos(t["pos"])
             end = lean_file.convert_pos(t["endPos"])
             pos2tactics[(start, end)] = t
+            text = lean_file[start:end]
 
         pos2premises = {}
         for p in premises_data:
@@ -711,13 +903,15 @@ class TracedFile:
         """Return the repo this file belongs to, as well as the file's path relative to it."""
         if self.path.is_relative_to(LEAN4_PACKAGES_DIR):
             # The theorem belongs to one of the dependencies.
+            assert(self.traced_repo.dependencies) # build_deps must be `True` to trace dependencies
             p = self.path.relative_to(LEAN4_PACKAGES_DIR)
             name = p.parts[0]
             repo = self.traced_repo.dependencies[name]
             return repo, p.relative_to(name)
         else:
             # The theorem belongs to the traced repo itself.
-            return self.traced_repo.repo, self.path
+            return self.repo, self.path
+            # return self.traced_repo.repo, self.path
 
     def get_traced_theorem(
         self, thm_or_name: Union[Theorem, str]
@@ -981,7 +1175,7 @@ class TracedRepo:
     """The corresponding Lean repo.
     """
 
-    dependencies: Dict[str, LeanGitRepo]
+    dependencies: Optional[Dict[str, LeanGitRepo]]
     """Dictionary mapping the name of each dependency to a :class:`LeanGitRepo` object.
     """
 
@@ -1022,15 +1216,15 @@ class TracedRepo:
         """
         logger.debug(f"Checking the sanity of {self}")
         assert isinstance(self.repo, LeanGitRepo)
-        assert isinstance(self.dependencies, dict)
-        for k, v in self.dependencies.items():
-            assert isinstance(k, str) and isinstance(v, LeanGitRepo)
+        # assert isinstance(self.dependencies, dict)
+        # for k, v in self.dependencies.items():
+            # assert isinstance(k, str) and isinstance(v, LeanGitRepo)
         assert isinstance(self.root_dir, Path)
         assert self.traced_files_graph is None or isinstance(
             self.traced_files_graph, nx.DiGraph
         )
 
-        assert self.repo not in self.dependencies.values()
+        # assert self.repo not in self.dependencies.values()
 
         json_files = {
             p.relative_to(self.root_dir) for p in self.root_dir.glob("**/*.ast.json")
@@ -1083,7 +1277,18 @@ class TracedRepo:
             raise RuntimeError(f"{root_dir} is not a Git repo.")
         repo = LeanGitRepo.from_path(root_dir)
 
-        json_paths = list(root_dir.glob("**/*.ast.json"))
+        if build_deps:
+            json_paths = list(root_dir.glob("**/*.ast.json"))
+        else:
+            json_paths = list(root_dir.glob(".lake/build/**/*.ast.json"))       
+                 
+        dep_exists = lambda p: p.with_suffix("").with_suffix("").with_suffix(".dep_paths").exists()
+        valid_paths = list(filter(dep_exists, json_paths))
+        lost_files = list(filter(lambda p: not dep_exists(p), json_paths))
+
+        # logger.debug(f"Valid paths: {valid_paths}")
+        logger.debug(f"Lost files: {lost_files}, {len(valid_paths)} of {len(lost_files)} files succesfully traced.")
+        json_paths = valid_paths
         random.shuffle(json_paths)
         logger.debug(
             f"Parsing {len(json_paths)} *.ast.json files in {root_dir} with {NUM_WORKERS} workers"
@@ -1105,7 +1310,11 @@ class TracedRepo:
                     )
                 )
 
-        dependencies = repo.get_dependencies(root_dir)
+        if build_deps:
+            dependencies = repo.get_dependencies(root_dir)
+        else:
+            dependencies = None
+            
         if build_deps:
             traced_files_graph = _build_dependency_graph(traced_files, root_dir, repo)
         else:
@@ -1156,7 +1365,11 @@ class TracedRepo:
             raise RuntimeError(f"{root_dir} is not a Git repo.")
         repo = LeanGitRepo.from_path(root_dir)
 
-        xml_paths = list(root_dir.glob("**/*.trace.xml"))
+        if build_deps:
+            xml_paths = list(root_dir.glob("**/*.trace.xml"))
+        else:
+            xml_paths = list(root_dir.glob(".lake/build/**/*.trace.xml"))
+            
         logger.debug(
             f"Loading {len(xml_paths)} traced XML files from {root_dir} with {NUM_WORKERS} workers"
         )
@@ -1184,8 +1397,10 @@ class TracedRepo:
                         total=len(xml_paths),
                     )
                 )
-
-        dependencies = repo.get_dependencies(root_dir)
+        if build_deps:
+            dependencies = repo.get_dependencies(root_dir)
+        else:
+            dependencies = None
         if build_deps:
             traced_files_graph = _build_dependency_graph(traced_files, root_dir, repo)
         else:
@@ -1210,6 +1425,8 @@ class TracedRepo:
         if thm.repo == self.repo:
             path = Path(thm.repo.name) / thm.file_path
         else:
-            assert thm.repo in self.dependencies.values()
+            # assert thm.repo in self.dependencies.values()
+            assert self.dependencies
             path = Path(self.name) / LEAN4_PACKAGES_DIR / thm.repo.name / thm.file_path
         return self.get_traced_file(path).get_traced_theorem(thm.full_name)
+

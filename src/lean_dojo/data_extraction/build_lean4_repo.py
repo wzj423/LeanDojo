@@ -155,6 +155,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("repo_name")
     parser.add_argument("--no-deps", action="store_true")
+    parser.add_argument("-i","--incremental", action="store_true")
     args = parser.parse_args()
 
     num_procs = int(os.environ["NUM_PROCS"])
@@ -163,13 +164,14 @@ def main() -> None:
 
     # Build the repo using lake.
     logger.info(f"Building {repo_name}")
-    if args.no_deps:
-        # The additional *.olean files wouldn't matter.
-        try:
-            run_cmd("lake exe cache get")
-        except subprocess.CalledProcessError:
-            pass
-    run_cmd("lake build")
+    if not args.incremental:
+        if args.no_deps:
+            # The additional *.olean files wouldn't matter.
+            try:
+                run_cmd("lake exe cache get")
+            except subprocess.CalledProcessError:
+                pass
+        run_cmd("lake build")
 
     # Copy the Lean 4 stdlib into the path of packages.
     lean_prefix = run_cmd(f"lean --print-prefix", capture_output=True).strip()
@@ -179,8 +181,11 @@ def main() -> None:
     else:
         packages_path = "lake-packages"
         build_path = "build"
-    shutil.copytree(lean_prefix, f"{packages_path}/lean4")
-
+    if not args.incremental:
+        try:
+            shutil.copytree(lean_prefix, f"{packages_path}/lean4")
+        except FileExistsError as e:
+            pass
     # Run ExtractData.lean to extract ASTs, tactic states, and premise information.
     dirs_to_monitor = [build_path]
     if not args.no_deps:
@@ -191,7 +196,8 @@ def main() -> None:
         if args.no_deps:
             cmd += " noDeps"
         logger.debug(cmd)
-        run_cmd(cmd, capture_output=True)
+        breakpoint()
+        # run_cmd(cmd, capture_output=True)
 
     check_files(packages_path, args.no_deps)
 

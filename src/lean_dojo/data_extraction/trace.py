@@ -21,7 +21,7 @@ LEAN4_BUILD_SCRIPT_PATH = Path(__file__).with_name("build_lean4_repo.py")
 LEAN4_DATA_EXTRACTOR_PATH = Path(__file__).with_name("ExtractData.lean")
 
 
-def _trace(repo: LeanGitRepo, build_deps: bool) -> None:
+def _trace(repo: LeanGitRepo, build_deps: bool, incremental_build: bool = False) -> None:
     assert (
         repo.exists()
     ), f"The {repo} does not exist. Please check the URL `{repo.commit_url}`."
@@ -40,6 +40,8 @@ def _trace(repo: LeanGitRepo, build_deps: bool) -> None:
     cmd = f"python build_lean4_repo.py {repo.name}"
     if not build_deps:
         cmd += " --no-deps"
+    if incremental_build:
+        cmd += " -i "
 
     try:
         container.run(
@@ -62,7 +64,7 @@ def is_available_in_cache(repo: LeanGitRepo) -> bool:
     return cache.get(repo.url, repo.commit) is not None
 
 
-def get_traced_repo_path(repo: LeanGitRepo, build_deps: bool = True) -> Path:
+def get_traced_repo_path(repo: LeanGitRepo, build_deps: bool = True, incremental_build: bool = False) -> Path:
     """Return the path of a traced repo in the cache.
 
     The function will trace a repo if it is not available in the cache. See :ref:`caching` for details.
@@ -79,7 +81,7 @@ def get_traced_repo_path(repo: LeanGitRepo, build_deps: bool = True) -> Path:
         logger.info(f"Tracing {repo}")
         with working_directory() as tmp_dir:
             logger.debug(f"Working in the temporary directory {tmp_dir}")
-            _trace(repo, build_deps)
+            _trace(repo, build_deps, incremental_build)
             traced_repo = TracedRepo.from_traced_files(tmp_dir / repo.name, build_deps)
             traced_repo.save_to_disk()
             path = cache.store(tmp_dir / repo.name)
@@ -92,6 +94,7 @@ def trace(
     repo: LeanGitRepo,
     dst_dir: Optional[Union[str, Path]] = None,
     build_deps: bool = True,
+    incremental_build: bool = False
 ) -> TracedRepo:
     """Trace a repo (and its dependencies), saving the results to ``dst_dir``.
 
@@ -112,7 +115,7 @@ def trace(
             not dst_dir.exists()
         ), f"The destination directory {dst_dir} already exists."
 
-    cached_path = get_traced_repo_path(repo, build_deps)
+    cached_path = get_traced_repo_path(repo, build_deps, incremental_build)
     logger.info(f"Loading the traced repo from {cached_path}")
     traced_repo = TracedRepo.load_from_disk(cached_path, build_deps)
     traced_repo.check_sanity()

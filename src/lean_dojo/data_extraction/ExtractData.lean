@@ -30,7 +30,7 @@ structure TacticTrace where
   stateAfter: String
   pos: String.Pos      -- Start position of the tactic.
   endPos: String.Pos   -- End position of the tactic.
-deriving ToJson
+deriving ToJson, BEq
 
 
 /--
@@ -289,33 +289,56 @@ private def visitTacticInfo (ctx : ContextInfo) (ti : TacticInfo) (parent : Info
     | _ => assert! false
 
   | _ => pure ()
-
-  match parent with
-  | .node (Info.ofTacticInfo i) _ =>
-    match i.stx.getKind with
-    | ``Lean.Parser.Tactic.tacticSeq1Indented | ``Lean.Parser.Tactic.tacticSeqBracketed | ``Lean.Parser.Tactic.rewriteSeq =>
-      let ctxBefore := { ctx with mctx := ti.mctxBefore }
-      let ctxAfter := { ctx with mctx := ti.mctxAfter }
-      let stateBefore ← Pp.ppGoals ctxBefore ti.goalsBefore
-      let stateAfter ← Pp.ppGoals ctxAfter ti.goalsAfter
-      if stateBefore == "no goals" || stateBefore == stateAfter then
-        pure ()
-      else
-        let some posBefore := ti.stx.getPos? true | pure ()
-        let some posAfter := ti.stx.getTailPos? true | pure ()
-        match ti.stx with
-        | .node _ _ _ =>
-          modify fun trace => {
-            trace with tactics := trace.tactics.push {
-              stateBefore := stateBefore,
-              stateAfter := stateAfter,
-              pos := posBefore,
-              endPos := posAfter,
-             }
-          }
-        | _ => pure ()
+  let ctxBefore := { ctx with mctx := ti.mctxBefore }
+  let ctxAfter := { ctx with mctx := ti.mctxAfter }
+  let stateBefore ← Pp.ppGoals ctxBefore ti.goalsBefore
+  let stateAfter ← Pp.ppGoals ctxAfter ti.goalsAfter
+  if stateBefore == "no goals" || stateBefore == stateAfter then
+    pure ()
+  else
+    let some posBefore := ti.stx.getPos? true | pure ()
+    let some posAfter := ti.stx.getTailPos? true | pure ()
+    match ti.stx with
+    | .node _ _ _ =>
+      let newTacticTrace: TacticTrace := {
+        stateBefore := stateBefore,
+        stateAfter := stateAfter,
+        pos := posBefore,
+        endPos := posAfter,
+      }
+      modify fun trace => {
+        if trace.tactics.contains newTacticTrace then
+          trace
+        else
+          trace with tactics := trace.tactics.push newTacticTrace
+      }
     | _ => pure ()
-  | _ => pure ()
+  -- match parent with
+  -- | .node (Info.ofTacticInfo i) _ =>
+  --   match i.stx.getKind with
+  --   | ``Lean.Parser.Tactic.tacticSeq1Indented | ``Lean.Parser.Tactic.tacticSeqBracketed | ``Lean.Parser.Tactic.rewriteSeq =>
+  --     let ctxBefore := { ctx with mctx := ti.mctxBefore }
+  --     let ctxAfter := { ctx with mctx := ti.mctxAfter }
+  --     let stateBefore ← Pp.ppGoals ctxBefore ti.goalsBefore
+  --     let stateAfter ← Pp.ppGoals ctxAfter ti.goalsAfter
+  --     if stateBefore == "no goals" || stateBefore == stateAfter then
+  --       pure ()
+  --     else
+  --       let some posBefore := ti.stx.getPos? true | pure ()
+  --       let some posAfter := ti.stx.getTailPos? true | pure ()
+  --       match ti.stx with
+  --       | .node _ _ _ =>
+  --         modify fun trace => {
+  --           trace with tactics := trace.tactics.push {
+  --             stateBefore := stateBefore,
+  --             stateAfter := stateAfter,
+  --             pos := posBefore,
+  --             endPos := posAfter,
+  --            }
+  --         }
+  --       | _ => pure ()
+  --   | _ => pure ()
+  -- | _ => pure ()
 
 
 /--
