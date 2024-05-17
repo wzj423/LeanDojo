@@ -134,6 +134,8 @@ class Dojo:
         entry: Union[Theorem, Tuple[LeanGitRepo, Path, int]],
         hard_timeout: Optional[float] = None,
         additional_imports: List[str] = [],
+        designated_traced_repo_path: Optional[str] = None,
+        max_heartbeats = 0,
     ):
         """Initialize Dojo.
 
@@ -147,6 +149,10 @@ class Dojo:
         self.entry = entry
         self.hard_timeout = hard_timeout
         self.additional_imports = additional_imports
+        
+        self.designated_traced_repo_path = designated_traced_repo_path
+
+        self.max_heartbeats = max_heartbeats
 
         if self.uses_tactics:
             assert isinstance(entry, Theorem)
@@ -181,13 +187,28 @@ class Dojo:
             self._install_handlers()
             os.chdir(self.tmp_dir)
 
-            # Copy and `cd` into the repo.
-            traced_repo_path = get_traced_repo_path(self.repo)
-            shutil.copytree(
-                traced_repo_path,
-                self.repo.name,
-                ignore=ignore_patterns("*.dep_paths", "*.ast.json", "*.trace.xml"),
-            )
+            if not self.designated_traced_repo_path:
+                # Copy and `cd` into the repo.
+                traced_repo_path = get_traced_repo_path(self.repo)
+            else:
+                traced_repo_path = Path(self.designated_traced_repo_path)
+            logger.debug(f"Copying repo in {traced_repo_path} to {self.tmp_dir/self.repo.name}")
+            tar_path = traced_repo_path.with_suffix('.tar')
+            if os.path.exists(tar_path):
+                logger.debug(f"Untar repo in {tar_path} to {self.tmp_dir/self.repo.name}")
+                # If the .tar file exists, untar it to the destination path
+                import subprocess
+                try:
+                    subprocess.run(['tar', '-xf', tar_path, '-C', self.tmp_dir], check=True)
+                except subprocess.CalledProcessError as e:
+                    print(f"Error during untar operation: {e}") 
+            else:
+                shutil.copytree(
+                    traced_repo_path,
+                    self.repo.name,
+                    ignore=ignore_patterns("*.dep_paths", "*.ast.json", "*.trace.xml"),
+                )
+            logger.debug(f"Repo copyed!")
             os.chdir(self.repo.name)
 
             # Replace the human-written proof with a `repl` tactic.
@@ -414,7 +435,7 @@ class Dojo:
         modified_code = (
             code_import
             + code_before_theorem
-            + "set_option maxHeartbeats 0 in\n"
+            +f"set_option maxHeartbeats {self.max_heartbeats} in\n"
             + code_thereom
             + code_proof
             + lean_file[proof_end:]
@@ -428,7 +449,8 @@ class Dojo:
                 f"Attempting to run a tactic on an invalid state {state}."
             )
         assert isinstance(tactic, str), f"Invalid tactic {tactic}"
-
+        if self.has_timedout:
+            raise DojoHardTimeoutError()
         tsid = state.id
         req = json.dumps({"sid": tsid, "cmd": tactic}, ensure_ascii=False)
         res = self._submit_request(req)

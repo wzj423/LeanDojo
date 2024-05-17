@@ -125,3 +125,42 @@ def trace(
         shutil.copytree(cached_path, dst_dir / cached_path.name)
 
     return traced_repo
+
+def trace_to(
+    repo: LeanGitRepo,
+    dst_dir: Union[str, Path],
+    build_deps: bool = True,
+    incremental_build: bool = False
+) -> TracedRepo:
+    """Trace a repo (and its dependencies), saving the results to ``dst_dir``, the TracedRepo will points at ``dst_dir`` instead of cache_dir.
+
+    The function only traces the repo when it's not available in the cache. Otherwise,
+    it directly copies the traced repo from the cache to ``dst_dir``. See :ref:`caching` for details.
+
+    Args:
+        repo (LeanGitRepo): The Lean repo to trace.
+        dst_dir (Union[str, Path]): The directory for saving the traced repo. If None, the traced repo is only saved in the cahe.
+        build_deps (bool): Whether to build the dependencies of ``repo``. Defaults to True.
+        incremental_build: Whether to build the lean4 repo from source or not. Default to False (Build from scratch)
+    Returns:
+        TracedRepo: A :class:`TracedRepo` object corresponding to the files at ``dst_dir``.
+    """
+    if dst_dir is not None:
+        dst_dir = Path(dst_dir)
+        assert (
+            not dst_dir.exists()
+        ), f"The destination directory {dst_dir} already exists."
+
+    cached_path = get_traced_repo_path(repo, build_deps, incremental_build)
+    logger.info(f"Loading the traced repo from {cached_path}")
+
+
+    assert( dst_dir is not None)
+    try:
+        dst_dir.mkdir(parents=True)
+        shutil.copytree(cached_path, dst_dir / cached_path.name)
+    except Exception as e:
+        pass
+    traced_repo = TracedRepo.load_from_disk(dst_dir / cached_path.name, build_deps)
+    traced_repo.check_sanity()
+    return traced_repo

@@ -190,7 +190,7 @@ def remove_optional_type(tp: type) -> type:
 
 
 @cache
-def read_url(url: str, num_retries: int = 2) -> str:
+def read_url(url: str, num_retries: int = 5) -> str:
     """Read the contents of the URL ``url``. Retry if failed"""
     backoff = 1
     while True:
@@ -203,7 +203,7 @@ def read_url(url: str, num_retries: int = 2) -> str:
             num_retries -= 1
             logger.debug(f"Request to {url} failed. Retrying...")
             time.sleep(backoff)
-            backoff *= 2
+            backoff *= 1.5
 
 
 @cache

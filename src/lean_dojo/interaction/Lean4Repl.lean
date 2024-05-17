@@ -15,7 +15,7 @@ private def printResponse {α : Type _} [ToJson α] (res : α) : IO Unit := do
 
 
 /-- Join a list of strings using a separator. --/
-private def join (l : List String) (sep : String := "\n") : String :=
+private def join (l : List String) (sep : String := "<RET_SEP>") : String :=
   match l with
   | [] => ""
   | first :: others => others.foldl (fun r s => r ++ sep ++ s) first

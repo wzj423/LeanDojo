@@ -30,8 +30,8 @@ structure TacticTrace where
   stateAfter: String
   pos: String.Pos      -- Start position of the tactic.
   endPos: String.Pos   -- End position of the tactic.
-  tacticName: Name
-deriving ToJson, BEq, Repr
+deriving ToJson, BEq
+
 
 /--
 The trace of a premise.
@@ -46,14 +46,6 @@ structure PremiseTrace where
   endPos: Option Position
 deriving ToJson
 
-/--
-Hack here, the trace of a calcStep (for rewrite 'calc' tactic to a string of haves)
--/
-structure SyntaxTrace where
-  king: Name
-  pos: String.Pos      -- Start position of the tactic.
-  endPos: String.Pos   -- End position of the tactic.
-deriving ToJson, BEq, Repr
 
 /--
 The trace of a Lean file.
@@ -62,7 +54,6 @@ structure Trace where
   commandASTs : Array Syntax    -- The ASTs of the commands in the file.
   tactics: Array TacticTrace    -- All tactics in the file.
   premises: Array PremiseTrace  -- All premises in the file.
-  additional_syntaxs: Array SyntaxTrace
 deriving ToJson
 
 
@@ -314,23 +305,10 @@ private def visitTacticInfo (ctx : ContextInfo) (ti : TacticInfo) (parent : Info
         stateAfter := stateAfter,
         pos := posBefore,
         endPos := posAfter,
-        tacticName := ti.stx.getKind,
       }
-      -- if ti.stx.getKind == `calcTactic then do
-      --   modify fun trace => {
-      --       trace
-      --       -- trace with tactics := trace.additional_syntaxs.push {kind:= ti.stx.getKind, }
-      --   }
       modify fun trace => {
-        -- let exists := trace.tactics.any (fun t =>
-        --   (t.tacticName == newTacticTrace.tacticName && t.pos == newTacticTrace.pos && t.endPos == newTacticTrace.endPos) ||
-        --   (t.stateBefore == newTacticTrace.stateBefore && t.stateAfter == newTacticTrace.stateAfter && t.pos == newTacticTrace.pos && t.endPos == newTacticTrace.endPos))
-        if trace.tactics.any (fun t =>
-          (t.tacticName == newTacticTrace.tacticName && t.pos == newTacticTrace.pos && t.endPos == newTacticTrace.endPos) ||
-          (t.stateBefore == newTacticTrace.stateBefore && t.stateAfter == newTacticTrace.stateAfter && t.pos == newTacticTrace.pos && t.endPos == newTacticTrace.endPos)) then Id.run do
-        -- if trace.tactics.contains newTacticTrace then Id.run do
-            -- dbg_trace s!"Duplicate tactic trace detected: {newTacticTrace.pos}:{newTacticTrace.endPos} {newTacticTrace.stateBefore} {newTacticTrace.stateAfter}"
-            trace
+        if trace.tactics.contains newTacticTrace then
+          trace
         else
           trace with tactics := trace.tactics.push newTacticTrace
       }
@@ -367,7 +345,6 @@ private def visitTacticInfo (ctx : ContextInfo) (ti : TacticInfo) (parent : Info
 Extract premise information from `TermInfo` in `InfoTree`.
 -/
 private def visitTermInfo (ti : TermInfo) (env : Environment) : TraceM Unit := do
-  -- dbg_trace s!"{ti.stx.getKind} {ti.stx} {ti.expr}"
   let some fullName := ti.expr.constName? | return ()
   let fileMap ← getFileMap
 
@@ -410,7 +387,6 @@ private def visitTermInfo (ti : TermInfo) (env : Environment) : TraceM Unit := d
 
 
 private def visitInfo (ctx : ContextInfo) (i : Info) (parent : InfoTree) (env : Environment) : TraceM Unit := do
-  dbg_trace s!"{i.stx.getKind}   ===>   {i.stx.getArgs}"
   match i with
   | .ofTacticInfo ti => visitTacticInfo ctx ti parent
   | .ofTermInfo ti => visitTermInfo ti env
