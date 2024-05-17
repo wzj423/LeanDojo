@@ -219,22 +219,28 @@ class Dojo:
                     f"Cannot find the *.ast.json file for {self.entry} in {traced_repo_path}."
                 )
 
+            repl_file = "Lean4Repl.lean"
+            repl_dst = Path(repl_file)
+            needBuildLean4Repl =  not repl_dst.exists() # We assume that a repo with Lean4Repl.lean is a repo with Lean4Repl.lean built
+
             self._modify_file(traced_file)
 
             # Run the modified file in a container.
             self.container = get_container()
             logger.debug(f"Launching the proof using {type(self.container)}")
             mts = [Mount(Path.cwd(), Path(f"/workspace/{self.repo.name}"))]
-            self.container.run(
-                "lake build Lean4Repl",
-                mts,
-                as_current_user=True,
-                capture_output=True,
-                work_dir=f"/workspace/{self.repo.name}",
-                cpu_limit=None,
-                memory_limit=None,
-                envs={},
-            )
+
+            if needBuildLean4Repl:
+                self.container.run(
+                    "lake build Lean4Repl",
+                    mts,
+                    as_current_user=True,
+                    capture_output=True,
+                    work_dir=f"/workspace/{self.repo.name}",
+                    cpu_limit=None,
+                    memory_limit=None,
+                    envs={},
+                )
             assert re.fullmatch(r"\d+g", TACTIC_MEMORY_LIMIT)
             memory_limit = 1024 * int(TACTIC_MEMORY_LIMIT[:-1])
             cmd = f"lake env lean --threads={TACTIC_CPU_LIMIT} --memory={memory_limit} {self.file_path}"
@@ -392,26 +398,28 @@ class Dojo:
             modified_code = (
                 self._get_imports()
                 + lean_file[:pos]
-                + "set_option maxHeartbeats 0 in\n#lean_dojo_repl\n\n"
+                + "set_option maxHeartbeats {self.max_heartbeats} in\n#lean_dojo_repl\n\n"
                 + lean_file[pos:]
             )
 
         repl_file = "Lean4Repl.lean"
         repl_dst = Path(repl_file)
-        with open("lakefile.lean", "a") as oup:
-            oup.write("\nlean_lib Lean4Repl {\n\n}\n")
-        if os.path.exists("lakefile.olean"):
-            os.remove("lakefile.olean")
-        if os.path.exists(".lake/lakefile.olean"):
-            os.remove(".lake/lakefile.olean")
 
         # Copy the REPL code to the right directory.
         repl_src = Path(__file__).with_name(repl_file)
         repl_code = repl_src.open().read()
         if repl_dst.exists():
-            raise DojoInitError(f"{repl_dst} exists")
-        with repl_dst.open("wt") as oup:
-            oup.write(repl_code)
+            pass
+        else:
+                # raise DojoInitError(f"{repl_dst} exists")
+            with repl_dst.open("wt") as oup:
+                oup.write(repl_code)
+            with open("lakefile.lean", "a") as oup:
+                oup.write("\nlean_lib Lean4Repl {\n\n}\n")
+            if os.path.exists("lakefile.olean"):
+                os.remove("lakefile.olean")
+            if os.path.exists(".lake/lakefile.olean"):
+                os.remove(".lake/lakefile.olean")
 
         # Write the modified code to the file.
         with self.file_path.open("wt") as oup:
