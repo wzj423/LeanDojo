@@ -62,7 +62,7 @@ structure Trace where
   commandASTs : Array Syntax    -- The ASTs of the commands in the file.
   tactics: Array TacticTrace    -- All tactics in the file.
   premises: Array PremiseTrace  -- All premises in the file.
-  -- additional_syntaxs: Array SyntaxTrace
+  additional_syntaxs: Array SyntaxTrace
 deriving ToJson
 
 
@@ -199,7 +199,7 @@ def packagesDir : FilePath :=
 
 
 def buildDir : FilePath :=
-  if Lake.defaultPackagesDir == "packages" then  -- Lean >= v4.3.0-rc2
+  if Lake.defaultPackagesDir == "packages" || Lake.defaultPackagesDir.fileName == "packages" then  -- Lean >= v4.3.0-rc2
     ".lake/build"
   else  -- Lean < v4.3.0-rc2
    "build"
@@ -410,7 +410,7 @@ private def visitTermInfo (ti : TermInfo) (env : Environment) : TraceM Unit := d
 
 
 private def visitInfo (ctx : ContextInfo) (i : Info) (parent : InfoTree) (env : Environment) : TraceM Unit := do
-  dbg_trace s!"{i.stx.getKind}   ===>   {i.stx.getArgs}"
+  -- dbg_trace s!"{i.stx.getKind}   ===>   {i.stx.getArgs}"
   match i with
   | .ofTacticInfo ti => visitTacticInfo ctx ti parent
   | .ofTermInfo ti => visitTermInfo ti env
@@ -456,30 +456,31 @@ open Traversal
 
 
 def getImports (header: Syntax) : IO String := do
-  -- Similar to `lean --deps` in Lean 3.
-  let mut s := ""
+   -- Similar to `lean --deps` in Lean 3.
+   let mut s := ""
+   return s.trim
+-- 
+--   for dep in headerToImports header do
+--     let oleanPath ← findOLean dep.module
+--     if oleanPath.isRelative then
+--       let leanPath := Path.toSrcDir! oleanPath "lean"
+--       assert! ← leanPath.pathExists
+--       s := s ++ "\n" ++ leanPath.toString
+--     else if ¬(oleanPath.toString.endsWith "/lib/lean/Init.olean") then
+--       let mut p := (Path.packagesDir / "lean4").toString ++ FilePath.pathSeparator.toString
+--       let mut found := false
+--       for c in (oleanPath.withExtension "lean").components do
+--         if c == "lib" then
+--           found := true
+--           p := p ++ "src"
+--           continue
+--         if found then
+--           p := p ++ FilePath.pathSeparator.toString ++ c
+--       p := p.replace "/lean4/src/lean/Lake" "/lean4/src/lean/lake/Lake"
+--       assert! ← FilePath.mk p |>.pathExists
+--       s := s ++ "\n" ++ p
 
-  for dep in headerToImports header do
-    let oleanPath ← findOLean dep.module
-    if oleanPath.isRelative then
-      let leanPath := Path.toSrcDir! oleanPath "lean"
-      assert! ← leanPath.pathExists
-      s := s ++ "\n" ++ leanPath.toString
-    else if ¬(oleanPath.toString.endsWith "/lib/lean/Init.olean") then
-      let mut p := (Path.packagesDir / "lean4").toString ++ FilePath.pathSeparator.toString
-      let mut found := false
-      for c in (oleanPath.withExtension "lean").components do
-        if c == "lib" then
-          found := true
-          p := p ++ "src"
-          continue
-        if found then
-          p := p ++ FilePath.pathSeparator.toString ++ c
-      p := p.replace "/lean4/src/lean/Lake" "/lean4/src/lean/lake/Lake"
-      assert! ← FilePath.mk p |>.pathExists
-      s := s ++ "\n" ++ p
-
-  return s.trim
+--  return s.trim
 
 
 /--
@@ -506,7 +507,7 @@ unsafe def processFile (path : FilePath) : IO Unit := do
   let commands := s.commands.pop -- Remove EOI command.
   let trees := s.commandState.infoState.trees.toArray
 
-  let traceM := (traverseForest trees env').run' ⟨#[header] ++ commands, #[], #[]⟩
+  let traceM := (traverseForest trees env').run' ⟨#[header] ++ commands, #[], #[], #[]⟩
   let (trace, _) ← traceM.run'.toIO {fileName := s!"{path}", fileMap := FileMap.ofString input} {env := env}
 
   let cwd ← IO.currentDir
@@ -516,6 +517,8 @@ unsafe def processFile (path : FilePath) : IO Unit := do
   let json_path := Path.toBuildDir "ir" relativePath "ast.json" |>.get!
   Path.makeParentDirs json_path
   IO.FS.writeFile json_path (toJson trace).pretty
+
+  dbg_trace s!"Build dir = {Path.buildDir}  {Lake.defaultPackagesDir}"
 
   let dep_path := Path.toBuildDir "ir" relativePath "dep_paths" |>.get!
   Path.makeParentDirs dep_path

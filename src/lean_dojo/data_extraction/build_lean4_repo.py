@@ -196,8 +196,8 @@ def main() -> None:
         if args.no_deps:
             cmd += " noDeps"
         logger.debug(cmd)
-        breakpoint()
-        # run_cmd(cmd, capture_output=True)
+        # breakpoint()
+        run_cmd(cmd, capture_output=True)
 
     check_files(packages_path, args.no_deps)
 

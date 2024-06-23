@@ -40,6 +40,7 @@ class TacticState:
     pp: str
     id: int = field(compare=False)
     message: Optional[str] = field(default=None, compare=False)
+    aux_pp: Optional[str] = field(default=None)
     goals: List[Goal] = field(init=False, compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -189,7 +190,7 @@ class Dojo:
 
             if not self.designated_traced_repo_path:
                 # Copy and `cd` into the repo.
-                traced_repo_path = get_traced_repo_path(self.repo)
+                traced_repo_path = get_traced_repo_path(self.repo, False)
             else:
                 traced_repo_path = Path(self.designated_traced_repo_path)
             logger.debug(f"Copying repo in {traced_repo_path} to {self.tmp_dir/self.repo.name}")
@@ -479,6 +480,7 @@ class Dojo:
                 tactic_state,
                 res["sid"],
                 res["message"],
+                res.get("UnifiedTacticState",None)
             )
 
     def run_cmd(self, state: CommandState, command: str) -> CommandResult:

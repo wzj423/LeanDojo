@@ -279,6 +279,13 @@ def to_json_path(root_dir: Path, path: Path, repo) -> Path:
 
 
 def to_lean_path(root_dir: Path, path: Path, repo) -> bool:
+    if ".lake/" not in str(path):
+        LEAN4_PACKAGES_DIR = Path("lake-packages")
+        LEAN4_BUILD_DIR = Path("build")
+    else:
+        LEAN4_PACKAGES_DIR = Path(".lake/packages")
+        LEAN4_BUILD_DIR = Path(".lake/build")
+
     if path.is_absolute():
         path = path.relative_to(root_dir)
 

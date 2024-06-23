@@ -52,13 +52,13 @@ NUM_WORKERS = NUM_PROCS - 1
 LEAN4_URL = "https://github.com/leanprover/lean4"
 """The URL of the Lean 4 repo."""
 
-LEAN4_PACKAGES_DIR = Path(".lake/packages")
+LEAN4_PACKAGES_DIR = Path("lake-packages")
 """The directory where Lean 4 dependencies are stored (since v4.3.0-rc2)."""
 
 LOAD_USED_PACKAGES_ONLY = "LOAD_USED_PACKAGES_ONLY" in os.environ
 """Only load depdendency files that are actually used by the target repo."""
 
-LEAN4_BUILD_DIR = Path(".lake/build")
+LEAN4_BUILD_DIR = Path("build")
 
 TACTIC_CPU_LIMIT = int(os.getenv("TACTIC_CPU_LIMIT", 1))
 """Number of CPUs for executing tactics when interacting with Lean (only useful when running within Docker).

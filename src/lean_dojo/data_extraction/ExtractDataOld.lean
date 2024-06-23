@@ -62,7 +62,7 @@ structure Trace where
   commandASTs : Array Syntax    -- The ASTs of the commands in the file.
   tactics: Array TacticTrace    -- All tactics in the file.
   premises: Array PremiseTrace  -- All premises in the file.
-  -- additional_syntaxs: Array SyntaxTrace
+  additional_syntaxs: Array SyntaxTrace
 deriving ToJson
 
 
@@ -410,7 +410,7 @@ private def visitTermInfo (ti : TermInfo) (env : Environment) : TraceM Unit := d
 
 
 private def visitInfo (ctx : ContextInfo) (i : Info) (parent : InfoTree) (env : Environment) : TraceM Unit := do
-  dbg_trace s!"{i.stx.getKind}   ===>   {i.stx.getArgs}"
+  -- dbg_trace s!"{i.stx.getKind}   ===>   {i.stx.getArgs}"
   match i with
   | .ofTacticInfo ti => visitTacticInfo ctx ti parent
   | .ofTermInfo ti => visitTermInfo ti env
@@ -420,10 +420,7 @@ private def visitInfo (ctx : ContextInfo) (i : Info) (parent : InfoTree) (env : 
 private partial def traverseTree (ctx: ContextInfo) (tree : InfoTree)
 (parent : InfoTree) (env : Environment) : TraceM Unit := do
   match tree with
-  | .context ctx' t =>
-    match ctx'.mergeIntoOuter? ctx with
-    | some ctx' => traverseTree ctx' t tree env
-    | none => panic! "fail to synthesis contextInfo when traversing infoTree"
+  | .context ctx' t => traverseTree ctx' t tree env
   | .node i children =>
     visitInfo ctx i parent env
     for x in children do
@@ -433,12 +430,8 @@ private partial def traverseTree (ctx: ContextInfo) (tree : InfoTree)
 
 private def traverseTopLevelTree (tree : InfoTree) (env : Environment) : TraceM Unit := do
   match tree with
-  | .context ctx t =>
-    match ctx.mergeIntoOuter? none with
-    | some ctx => traverseTree ctx t tree env
-    | none => panic! "fail to synthesis contextInfo for top-level infoTree"
+  | .context ctx t => traverseTree ctx t tree env
   | _ => pure ()
-
 
 /--
 Process an array of `InfoTree` (one for each top-level command in the file).
@@ -459,25 +452,28 @@ def getImports (header: Syntax) : IO String := do
   -- Similar to `lean --deps` in Lean 3.
   let mut s := ""
 
-  for dep in headerToImports header do
-    let oleanPath ← findOLean dep.module
-    if oleanPath.isRelative then
-      let leanPath := Path.toSrcDir! oleanPath "lean"
-      assert! ← leanPath.pathExists
-      s := s ++ "\n" ++ leanPath.toString
-    else if ¬(oleanPath.toString.endsWith "/lib/lean/Init.olean") then
-      let mut p := (Path.packagesDir / "lean4").toString ++ FilePath.pathSeparator.toString
-      let mut found := false
-      for c in (oleanPath.withExtension "lean").components do
-        if c == "lib" then
-          found := true
-          p := p ++ "src"
-          continue
-        if found then
-          p := p ++ FilePath.pathSeparator.toString ++ c
-      p := p.replace "/lean4/src/lean/Lake" "/lean4/src/lean/lake/Lake"
-      assert! ← FilePath.mk p |>.pathExists
-      s := s ++ "\n" ++ p
+--  for dep in headerToImports header do
+--    let oleanPath ← findOLean dep.module
+--    if oleanPath.isRelative then
+--      let leanPath := Path.toSrcDir! oleanPath "lean"
+--      let leanPathExists ← leanPath.pathExists
+--      if  leanPathExists == false  then
+--        dbg_trace s!"{leanPath} {oleanPath} {dep}"
+--        assert!  ← leanPath.pathExists
+--      s := s ++ "\n" ++ leanPath.toString
+--    else if ¬(oleanPath.toString.endsWith "/lib/lean/Init.olean") then
+--      let mut p := (Path.packagesDir / "lean4").toString ++ FilePath.pathSeparator.toString
+--      let mut found := false
+--      for c in (oleanPath.withExtension "lean").components do
+--        if c == "lib" then
+--          found := true
+--          p := p ++ "src"
+--          continue
+--        if found then
+--          p := p ++ FilePath.pathSeparator.toString ++ c
+--      p := p.replace "/lean4/src/lean/Lake" "/lean4/src/lean/lake/Lake"
+--      assert! ← FilePath.mk p |>.pathExists
+--      s := s ++ "\n" ++ p
 
   return s.trim
 
@@ -506,7 +502,7 @@ unsafe def processFile (path : FilePath) : IO Unit := do
   let commands := s.commands.pop -- Remove EOI command.
   let trees := s.commandState.infoState.trees.toArray
 
-  let traceM := (traverseForest trees env').run' ⟨#[header] ++ commands, #[], #[]⟩
+  let traceM := (traverseForest trees env').run' ⟨#[header] ++ commands, #[], #[], #[]⟩
   let (trace, _) ← traceM.run'.toIO {fileName := s!"{path}", fileMap := FileMap.ofString input} {env := env}
 
   let cwd ← IO.currentDir
@@ -564,8 +560,8 @@ def processAllFiles (noDeps : Bool) : IO Unit := do
 
     for (t, path) in tasks do
       match ← IO.wait t with
-      | Except.error _ =>
-        println! s!"WARNING: Failed to process {path}"
+      | Except.error E =>
+        println! s!"WARNING: Failed to process {path} {E}"
         pure ()
         -- throw e
       | Except.ok _ => pure ()

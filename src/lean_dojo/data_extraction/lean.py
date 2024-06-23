@@ -210,10 +210,10 @@ class LeanFile:
         num_bytes = []
 
         for line in self.abs_path.open("rb"):
-            if b"\r\n" in line:
-                raise RuntimeError(
-                    f"{self.abs_path} contains Windows-style line endings. This is discouraged (see https://github.com/leanprover-community/mathlib4/pull/6506)."
-                )
+            # if b"\r\n" in line:
+            #     raise RuntimeError(
+            #         f"{self.abs_path} contains Windows-style line endings. This is discouraged (see https://github.com/leanprover-community/mathlib4/pull/6506)."
+            #     )
             if line.endswith(b"\n"):
                 endwith_newline = True
                 line = line[:-1]
@@ -292,7 +292,7 @@ class LeanFile:
                     if m >= line_byte_idx:
                         return Pos(i, j + 1)
 
-        raise ValueError(f"Invalid byte index {byte_idx} in {self.path}.")
+        raise ValueError(f"Invalid byte index {byte_idx} in {self.path}, num_bytes={self.num_bytes}.")
 
     def offset(self, pos: Pos, delta: int) -> Pos:
         """Off set a position by a given number."""
@@ -602,7 +602,7 @@ class LeanGitRepo:
             for pkg in lake_manifest["packages"]:
                 url = pkg["url"]
                 if url.endswith(".git"):
-                    breakpoint()
+                    # breakpoint()
                     url = url[:-4]
                 if url.startswith("git@"):
                     url = "https://" + url[4:].replace(":", "/")                

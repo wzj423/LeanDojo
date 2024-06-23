@@ -901,43 +901,48 @@ class TracedFile:
     def _from_lean4_traced_file(
         cls, root_dir: Path, json_path: Path, repo: LeanGitRepo
     ) -> "TracedFile":
-        lean_path = to_lean_path(root_dir, json_path, repo)
-        lean_file = LeanFile(root_dir, lean_path)
+        try:
+            lean_path = to_lean_path(root_dir, json_path, repo)
+            lean_file = LeanFile(root_dir, lean_path)
+            if len(lean_file.code)==0:
+                return None
+            data = json.load(json_path.open())
 
-        data = json.load(json_path.open())
+            data["module_paths"] = []
+            # for line in (
+            #     json_path.with_suffix("").with_suffix(
+            #         "").with_suffix(".dep_paths").open()
+            # ):
+            #     line = line.strip()
+            #     if line == "":
+            #         break
+            #     data["module_paths"].append(line)
 
-        data["module_paths"] = []
-        for line in (
-            json_path.with_suffix("").with_suffix(
-                "").with_suffix(".dep_paths").open()
-        ):
-            line = line.strip()
-            if line == "":
-                break
-            data["module_paths"].append(line)
+            # small_step_tacs = generate_smallstep_tactics(
+            #     data["tactics"], lean_file=lean_file)
 
-        small_step_tacs = generate_smallstep_tactics(
-            data["tactics"], lean_file=lean_file)
+            # tacs = small_step_tacs
+            # tacs.sort(key=lambda x: x[5])
 
-        tacs = small_step_tacs
-        tacs.sort(key=lambda x: x[5])
+            ast = FileNode.from_data(data, lean_file)
+            comments = _collect_lean4_comments(ast)
+            TracedFile._post_process_lean4(
+                ast,
+                lean_file,
+                data["tactics"],
+                data["premises"],
+                data["module_paths"],
+                comments,
+            )
 
-        ast = FileNode.from_data(data, lean_file)
-        comments = _collect_lean4_comments(ast)
-        TracedFile._post_process_lean4(
-            ast,
-            lean_file,
-            data["tactics"],
-            data["premises"],
-            data["module_paths"],
-            comments,
-        )
-
-        
-        calc_replace_dict = generate_replace_dict(
-                ast, lean_file) if "calc" in lean_file[:] else None
-
-        return cls(root_dir, repo, lean_file, ast, comments, small_step_tacs=tacs, calc_replace_dict = calc_replace_dict)
+            
+            # calc_replace_dict = generate_replace_dict(
+            #         ast, lean_file) if "calc" in lean_file[:] else None
+            tacs = None
+            calc_replace_dict= None
+            return cls(root_dir, repo, lean_file, ast, comments, small_step_tacs=tacs, calc_replace_dict = calc_replace_dict)
+        except (ValueError,AssertionError)  as e:
+            return None
 
     @classmethod
     def _post_process_lean4(
@@ -1509,13 +1514,13 @@ class TracedRepo:
         if build_deps:
             json_paths = list(root_dir.glob("**/*.ast.json"))
         else:
-            json_paths = list(root_dir.glob(".lake/build/**/*.ast.json"))
+            json_paths = list(root_dir.glob("**/build/**/*.ast.json"))
 
-        def dep_exists(p): return p.with_suffix("").with_suffix(
+        def dep_exists(p): return True or p.with_suffix("").with_suffix(
             "").with_suffix(".dep_paths").exists()
         valid_paths = list(filter(dep_exists, json_paths))
         lost_files = list(filter(lambda p: not dep_exists(p), json_paths))
-
+    
         # logger.debug(f"Valid paths: {valid_paths}")
         logger.debug(
             f"Lost files: {lost_files}, {len(valid_paths)} of {len(json_paths)} files succesfully traced.")
@@ -1525,7 +1530,7 @@ class TracedRepo:
             f"Parsing {len(json_paths)} *.ast.json files in {root_dir} with {NUM_WORKERS} workers"
         )
 
-        if NUM_WORKERS <= 1:
+        if True or NUM_WORKERS <= 1:
             traced_files = [
                 TracedFile.from_traced_file(root_dir, path, repo)
                 for path in tqdm(json_paths)
@@ -1541,7 +1546,8 @@ class TracedRepo:
                         total=len(json_paths),
                     )
                 )
-
+        traced_files = [t for t in traced_files if t!=None]
+        logger.debug(f"Succesfully parsed {len(traced_files)} files!")
         if build_deps:
             dependencies = repo.get_dependencies(root_dir)
         else:

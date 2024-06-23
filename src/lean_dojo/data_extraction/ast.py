@@ -478,6 +478,7 @@ class CommandDeclarationNode(Node):
             assert isinstance(children[0], CommandDeclmodifiersNode)
             assert type(children[1]) in (
                 CommandDefNode,
+                CommandDefinitionNode,
                 CommandTheoremNode,
                 CommandInductiveNode,
                 CommandClassinductiveNode,
@@ -942,6 +943,37 @@ class CommandDefNode(Node):
     def from_data(
         cls, node_data: Dict[str, Any], lean_file: LeanFile
     ) -> "CommandDefNode":
+        assert node_data["info"] == "none"
+        start, end = None, None
+        children = _parse_children(node_data, lean_file)
+
+        if isinstance(children[0], TokenAntiquotNode) or isinstance(
+            children[1], CommandDeclidAntiquotNode
+        ):
+            name = None
+        else:
+            assert isinstance(children[0], AtomNode) and children[0].val == "def"
+            assert isinstance(children[1], CommandDeclidNode)
+            decl_id_node = children[1]
+            ident_node = decl_id_node.children[0]
+
+            if isinstance(ident_node, IdentNode):
+                name = ident_node.val
+            else:
+                assert isinstance(ident_node, IdentAntiquotNode)
+                name = ident_node.get_ident()
+
+        return cls(lean_file, start, end, children, name)
+
+
+@dataclass(frozen=True)
+class CommandDefinitionNode(Node):
+    name: str
+
+    @classmethod
+    def from_data(
+        cls, node_data: Dict[str, Any], lean_file: LeanFile
+    ) -> "CommandDefinitionNode":
         assert node_data["info"] == "none"
         start, end = None, None
         children = _parse_children(node_data, lean_file)
